@@ -1,7 +1,7 @@
 # Samara Discord Bot
 
 <p align="center">
-  <img src="https://via.placeholder.com/200x200.png?text=Samara" alt="Samara Bot Logo" width="200"/>
+  <img src="https://img.itch.zone/aW1nLzIwNjY0MDMwLnBuZw==/original/MY5uVE.png" alt="Samara Bot Logo" width="200"/>
 </p>
 
 Samara es un avanzado bot de Discord que actúa como una persona real, con memoria persistente y personalidad única. Diseñado para interactuar de manera natural en servidores de Discord, Samara se comporta como una mujer joven de 20 años, manteniendo conversaciones fluidas y recordando detalles personales sobre los usuarios. Utiliza tecnologías de vanguardia como LangChain, OpenAI y Pinecone para mantener conversaciones contextuales y recordar interacciones pasadas con los usuarios.
