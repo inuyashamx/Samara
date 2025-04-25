@@ -1,4 +1,4 @@
-# Samara Discord Bot
+# Samara Discord IA
 
 <p align="center">
   <img src="https://img.itch.zone/aW1nLzIwNjY0MDMwLnBuZw==/original/MY5uVE.png" alt="Samara Bot Logo" width="200"/>
