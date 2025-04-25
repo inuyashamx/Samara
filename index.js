@@ -84,6 +84,9 @@ const langMem = new LangMem({
 // Memoria local de mensajes recientes
 let recentMessages = [];
 
+// Caché global de conversaciones recientes entre usuarios
+let recentInteractions = new Map();
+
 // Función para guardar un mensaje en la memoria local
 function saveMessageToLocalMemory(message) {
   if (!message || !message.content) return;
@@ -131,6 +134,57 @@ function saveMessageToLocalMemory(message) {
   }
 }
 
+// Función para registrar interacción entre usuarios
+function trackUserInteraction(userId, username, interactionType, targetUserId, targetUsername, content) {
+  // Crear clave para la interacción bidireccional
+  const interactionKey1 = `${userId}-${targetUserId}`;
+  const interactionKey2 = `${targetUserId}-${userId}`;
+  
+  // Crear objeto de interacción
+  const interaction = {
+    userId,
+    username,
+    targetUserId,
+    targetUsername,
+    type: interactionType, // 'message', 'mention', 'reply', etc.
+    content,
+    timestamp: new Date().toISOString()
+  };
+  
+  // Guardar en ambas direcciones para facilitar búsquedas
+  recentInteractions.set(interactionKey1, interaction);
+  
+  // Crear versión inversa de la interacción
+  const reverseInteraction = {
+    userId: targetUserId,
+    username: targetUsername,
+    targetUserId: userId,
+    targetUsername: username,
+    type: 'received_' + interactionType,
+    content,
+    timestamp: new Date().toISOString()
+  };
+  
+  recentInteractions.set(interactionKey2, reverseInteraction);
+  
+  // Guardar en archivo para persistencia
+  try {
+    const interactionsObj = {};
+    for (const [key, value] of recentInteractions.entries()) {
+      interactionsObj[key] = value;
+    }
+    
+    fs.writeFileSync(
+      path.join(__dirname, 'data', 'recent_interactions.json'),
+      JSON.stringify(interactionsObj, null, 2)
+    );
+    
+    console.log(`Interacción registrada entre ${username} y ${targetUsername}`);
+  } catch (error) {
+    console.error('Error al guardar interacciones recientes:', error);
+  }
+}
+
 // Función para cargar mensajes recientes al inicio
 function loadRecentMessages() {
   try {
@@ -143,6 +197,24 @@ function loadRecentMessages() {
   } catch (error) {
     console.error('Error al cargar mensajes recientes:', error);
     recentMessages = [];
+  }
+}
+
+// Función para cargar interacciones recientes al inicio
+function loadRecentInteractions() {
+  try {
+    const filePath = path.join(__dirname, 'data', 'recent_interactions.json');
+    if (fs.existsSync(filePath)) {
+      const data = fs.readFileSync(filePath, 'utf8');
+      const interactionsObj = JSON.parse(data);
+      for (const [key, value] of Object.entries(interactionsObj)) {
+        recentInteractions.set(key, value);
+      }
+      console.log(`Cargadas ${recentInteractions.size} interacciones recientes desde archivo`);
+    }
+  } catch (error) {
+    console.error('Error al cargar interacciones recientes:', error);
+    recentInteractions = new Map();
   }
 }
 
@@ -262,20 +334,22 @@ async function extractFacts(messageContent, userId) {
     - Películas o series favoritas
     - Juegos favoritos
     - Relaciones con otros usuarios
+    - Interacciones con otros usuarios (si menciona haber hablado con alguien)
+    - Referencias a conversaciones previas
     - Cualquier otra información personal relevante
     
     Mensaje: "${messageContent}"
     
     Devuelve SOLO un array JSON con los hechos encontrados, cada uno como un string simple y directo.
     Si no hay hechos personales, devuelve un array vacío [].
-    Ejemplo de respuesta: ["Es desarrollador de software", "Vive en México", "Le gusta jugar Genshin Impact"]
+    Ejemplo de respuesta: ["Es desarrollador de software", "Vive en México", "Le gusta jugar Genshin Impact", "Ha hablado con Michi recientemente"]
     `;
     
     // Usar el modelo para extraer hechos
     const response = await llm.invoke([
       {
         role: "system",
-        content: "Eres un asistente especializado en extraer hechos personales de mensajes. Respondes ÚNICAMENTE con un array JSON de strings."
+        content: "Eres un asistente especializado en extraer hechos personales de mensajes. Respondes ÚNICAMENTE con un array JSON."
       },
       {
         role: "user",
@@ -357,6 +431,104 @@ async function saveExtractedFacts(userId, facts) {
     }
   } catch (error) {
     console.error('Error al guardar hechos:', error);
+  }
+}
+
+// Función para detectar y registrar relaciones entre usuarios
+async function detectRelationships(messageContent, userId) {
+  if (!messageContent || messageContent.length < 10) {
+    return [];
+  }
+  
+  try {
+    // Prompt para detectar relaciones
+    const prompt = `
+    Analiza el siguiente mensaje y detecta si menciona alguna relación entre personas.
+    Busca información como: amistad, familia, relaciones románticas, laborales, etc.
+    
+    Mensaje: "${messageContent}"
+    
+    Devuelve SOLO un array JSON con las relaciones encontradas, cada una como un objeto con:
+    - "persona1": nombre de la primera persona
+    - "persona2": nombre de la segunda persona
+    - "tipo": tipo de relación (amigos, familia, pareja, etc.)
+    
+    Si no hay relaciones, devuelve un array vacío [].
+    Ejemplo: [{"persona1": "Juan", "persona2": "María", "tipo": "amigos"}]
+    `;
+    
+    // Usar el modelo para extraer relaciones
+    const response = await llm.invoke([
+      {
+        role: "system",
+        content: "Eres un asistente especializado en extraer relaciones entre personas. Respondes ÚNICAMENTE con un array JSON."
+      },
+      {
+        role: "user",
+        content: prompt
+      }
+    ]);
+    
+    // Intentar parsear el JSON
+    try {
+      const jsonMatch = response.content.match(/\[.*\]/s);
+      if (jsonMatch) {
+        const relationships = JSON.parse(jsonMatch[0]);
+        console.log(`Relaciones detectadas: ${relationships.length}`);
+        return relationships;
+      }
+    } catch (error) {
+      console.error('Error al parsear relaciones:', error);
+    }
+    
+    return [];
+  } catch (error) {
+    console.error('Error al detectar relaciones:', error);
+    return [];
+  }
+}
+
+// Función para registrar relaciones entre usuarios
+async function registerRelationships(relationships, message) {
+  if (!relationships || relationships.length === 0) return;
+  
+  // Obtener todos los usuarios de Discord
+  const users = Array.from(client.users.cache.values());
+  
+  for (const rel of relationships) {
+    if (rel.persona1 && rel.persona2 && rel.tipo) {
+      console.log(`Relación detectada: ${rel.persona1} es ${rel.tipo} de ${rel.persona2}`);
+      
+      // Buscar usuarios que coincidan con los nombres detectados
+      const matchUser1 = users.find(user => 
+        user.username.toLowerCase().includes(rel.persona1.toLowerCase()) || 
+        rel.persona1.toLowerCase().includes(user.username.toLowerCase())
+      );
+      
+      const matchUser2 = users.find(user => 
+        user.username.toLowerCase().includes(rel.persona2.toLowerCase()) || 
+        rel.persona2.toLowerCase().includes(user.username.toLowerCase())
+      );
+      
+      // Si se encontraron coincidencias, guardar la relación
+      if (matchUser1 && matchUser2) {
+        console.log(`Usuarios encontrados: ${matchUser1.username} y ${matchUser2.username}`);
+        
+        // Guardar la relación en ambas direcciones
+        await langMem.saveRelationship(matchUser1.id, matchUser2.id, {
+          type: rel.tipo,
+          source: "message",
+          timestamp: new Date().toISOString(),
+          content: message.content
+        });
+        
+        // Guardar hechos sobre la relación para ambos usuarios
+        await langMem.saveFact(matchUser1.id, `Tiene una relación de tipo "${rel.tipo}" con ${matchUser2.username}`);
+        await langMem.saveFact(matchUser2.id, `Tiene una relación de tipo "${rel.tipo}" con ${matchUser1.username}`);
+        
+        console.log(`Relación guardada entre ${matchUser1.username} y ${matchUser2.username}`);
+      }
+    }
   }
 }
 
@@ -468,6 +640,61 @@ async function logMemoryUsers() {
   console.log("\n=== FIN DE USUARIOS EN MEMORIA ===\n");
 }
 
+// Función para verificar si Samara ha hablado con un usuario específico
+function hasInteractedWithUser(targetUsername) {
+  // Normalizar el nombre de usuario para comparación
+  const normalizedTarget = targetUsername.toLowerCase();
+  
+  // Buscar en interacciones recientes
+  for (const [key, interaction] of recentInteractions.entries()) {
+    const username = interaction.targetUsername.toLowerCase();
+    
+    // Comprobar si el nombre coincide parcialmente
+    if (username.includes(normalizedTarget) || normalizedTarget.includes(username)) {
+      console.log(`Encontrada interacción con ${interaction.targetUsername}`);
+      return {
+        found: true,
+        interaction: interaction
+      };
+    }
+  }
+  
+  // Buscar en mensajes recientes
+  const matchingMessages = recentMessages.filter(msg => 
+    msg.author.toLowerCase().includes(normalizedTarget) || 
+    normalizedTarget.includes(msg.author.toLowerCase())
+  );
+  
+  if (matchingMessages.length > 0) {
+    console.log(`Encontrados ${matchingMessages.length} mensajes de ${targetUsername}`);
+    return {
+      found: true,
+      messages: matchingMessages
+    };
+  }
+  
+  // Buscar en la memoria a largo plazo
+  const userMemories = Array.from(langMem.memories.entries())
+    .filter(([userId, memories]) => {
+      // Intentar encontrar coincidencias en las memorias
+      return memories.some(memory => 
+        memory.username && 
+        (memory.username.toLowerCase().includes(normalizedTarget) || 
+         normalizedTarget.includes(memory.username.toLowerCase()))
+      );
+    });
+  
+  if (userMemories.length > 0) {
+    console.log(`Encontradas memorias para ${targetUsername}`);
+    return {
+      found: true,
+      memories: userMemories
+    };
+  }
+  
+  return { found: false };
+}
+
 // Función para procesar mensajes
 async function processMessage(message) {
   if (message.author.bot) return;
@@ -489,8 +716,15 @@ async function processMessage(message) {
       // Extraer hechos del mensaje (no crítico)
       const facts = await extractFacts(message.content, message.author.id);
       await saveExtractedFacts(message.author.id, facts);
+      
+      // Detectar posibles relaciones mencionadas en el mensaje
+      const relationships = await detectRelationships(message.content, message.author.id);
+      if (relationships && relationships.length > 0) {
+        console.log(`Detectadas ${relationships.length} posibles relaciones en el mensaje`);
+        await registerRelationships(relationships, message);
+      }
     } catch (factError) {
-      console.error('Error al extraer hechos:', factError);
+      console.error('Error al extraer hechos o relaciones:', factError);
     }
     
     // Guardar el mensaje en Pinecone si está disponible
@@ -644,7 +878,8 @@ async function processMessage(message) {
       Memorias previas con ${message.author.username}:
       ${userContext.memories.length > 0 
         ? userContext.memories.slice(0, 5).join('\n')
-        : "- No tengo memorias previas significativas con este usuario."}`;
+        : "- No tengo memorias previas significativas con este usuario."}
+      `;
 
       // Preparar el contexto con los mensajes recientes relevantes
       let recentContextMessages = [];
@@ -657,8 +892,16 @@ async function processMessage(message) {
                                  messageContent.includes('sabes quien') ||
                                  messageContent.includes('sabes quién') ||
                                  messageContent.includes('donde esta') ||
-                                 messageContent.includes('dónde está');
+                                 messageContent.includes('dónde está') ||
+                                 messageContent.includes('hablado con') ||
+                                 messageContent.includes('has hablado con') ||
+                                 messageContent.includes('recuerdas a');
                                  
+      const isAskingAboutInteractions = messageContent.includes('has hablado con') || 
+                                       messageContent.includes('hablaste con') ||
+                                       messageContent.includes('has conversado con') ||
+                                       messageContent.includes('conversaste con');
+
       const isAskingAboutMessages = messageContent.includes('que dijo') ||
                                    messageContent.includes('qué dijo') ||
                                    messageContent.includes('que has leido') ||
@@ -668,18 +911,22 @@ async function processMessage(message) {
                                    messageContent.includes('de quienes') ||
                                    messageContent.includes('de quién') ||
                                    messageContent.includes('ultimo que hablaron') ||
-                                   messageContent.includes('último que hablaron');
-      
+                                   messageContent.includes('último que hablaron') ||
+                                   messageContent.includes('primer mensaje') ||
+                                   messageContent.includes('primera conversación') ||
+                                   messageContent.includes('recuerdas');
+
       // Extraer posibles nombres de personas mencionadas
       let personNames = [];
-      if (isAskingAboutPerson || isAskingAboutMessages) {
+      if (isAskingAboutPerson || isAskingAboutMessages || isAskingAboutInteractions) {
         const patterns = [
           /(?:quien|quién) es ([a-zá-úñ]+)/i,
           /(?:conoces a|sabes (?:quien|quién) es) ([a-zá-úñ]+)/i,
           /(?:donde|dónde) (?:esta|está|fue) ([a-zá-úñ]+)/i,
           /(?:que|qué) (?:dijo|escribió|habló) ([a-zá-úñ]+)/i,
           /(?:ultimo|último) (?:mensaje|mensajes) de ([a-zá-úñ]+)/i,
-          /de (?:quienes|quién|quien) (?:son|es|has|has visto|has leído)/i
+          /de (?:quienes|quién|quien) (?:son|es|has|has visto|has leído)/i,
+          /(?:has hablado|hablaste|has conversado|conversaste) con ([a-zá-úñ]+)/i
         ];
         
         for (const pattern of patterns) {
@@ -699,8 +946,9 @@ async function processMessage(message) {
             !['quien', 'quién', 'como', 'cómo', 'cuando', 'cuándo', 'donde', 'dónde', 
               'porque', 'porqué', 'cual', 'cuál', 'que', 'qué', 'cuanto', 'cuánto',
               'para', 'sobre', 'conoces', 'sabes', 'dime', 'háblame', 'cuéntame',
-              'canal', 'chat', 'mensaje', 'mensajes', 'leído', 'leido', 'visto',
-              'ultimo', 'último', 'hablaron', 'dijeron'].includes(word.toLowerCase())
+              'canal', 'chat', 'mensaje', 'mensajes', 'leído', 'visto',
+              'ultimo', 'último', 'hablaron', 'dijeron', 'has', 'con', 'hablado',
+              'conversado', 'interactuado'].includes(word.toLowerCase())
           );
           
           if (potentialNames.length > 0) {
@@ -709,7 +957,7 @@ async function processMessage(message) {
           }
         }
       }
-      
+
       console.log(`Nombres de personas detectados: ${personNames.length > 0 ? personNames.join(', ') : 'ninguno'}`);
       
       if (personNames.length > 0) {
@@ -784,7 +1032,10 @@ async function processMessage(message) {
           messageContent.includes('quienes escribieron') || 
           messageContent.includes('quiénes escribieron') ||
           messageContent.includes('ultimo que hablaron') ||
-          messageContent.includes('último que hablaron')) {
+          messageContent.includes('último que hablaron') ||
+          messageContent.includes('primer mensaje') ||
+          messageContent.includes('primera conversación') ||
+          messageContent.includes('recuerdas')) {
         
         // Determinar el canal de interés
         let channelOfInterest = '';
@@ -818,6 +1069,36 @@ async function processMessage(message) {
         }
       }
       
+      // Verificar específicamente si se pregunta sobre si Samara ha hablado con alguien
+      if (isAskingAboutInteractions && personNames.length > 0) {
+        for (const name of personNames) {
+          // Usar la función hasInteractedWithUser para verificar interacciones
+          const interactionResult = hasInteractedWithUser(name);
+          
+          if (interactionResult.found) {
+            console.log(`Verificado que Samara ha interactuado con ${name}`);
+            
+            // Añadir información sobre la interacción al contexto
+            systemPrompt += `\n\nCONFIRMACIÓN DE INTERACCIÓN CON ${name.toUpperCase()}:\n`;
+            systemPrompt += `- Sí, he interactuado con ${name} anteriormente.\n`;
+            
+            // Añadir detalles específicos según el tipo de interacción encontrada
+            if (interactionResult.interaction) {
+              systemPrompt += `- Última interacción: "${interactionResult.interaction.content}"\n`;
+              systemPrompt += `- Momento: ${new Date(interactionResult.interaction.timestamp).toLocaleString()}\n`;
+            } else if (interactionResult.messages && interactionResult.messages.length > 0) {
+              const recentMessage = interactionResult.messages[0];
+              systemPrompt += `- Mensaje reciente: "${recentMessage.content}"\n`;
+              systemPrompt += `- Momento: ${new Date(recentMessage.timestamp).toLocaleString()}\n`;
+            }
+          } else {
+            console.log(`Verificado que Samara NO ha interactuado con ${name}`);
+            systemPrompt += `\n\nCONFIRMACIÓN DE INTERACCIÓN CON ${name.toUpperCase()}:\n`;
+            systemPrompt += `- No, no he interactuado con ${name} anteriormente o no tengo registro de ello.\n`;
+          }
+        }
+      }
+      
       // Añadir instrucciones importantes
       systemPrompt += `\n
       IMPORTANTE: Tienes acceso a mensajes pasados y DEBES usarlos para responder. NO digas que no puedes acceder a conversaciones pasadas o información en tiempo real. SÍ PUEDES ver y recordar mensajes de los canales monitoreados (chat-general y canal-impostor) gracias a tu sistema de memoria con Pinecone.
@@ -829,7 +1110,7 @@ async function processMessage(message) {
       4. Haz preguntas de seguimiento para mantener la conversación
       5. No hables como una IA ni uses frases como "como entidad digital" o "mi función es"
       6. Mantén tu personalidad seria pero conversacional
-      7. Actúa como un miembro más del grupo, no como un asistente
+      7. Actúa como un miembro más del grupo
       8. SI te preguntan sobre mensajes o personas en los canales, DEBES responder con la información que tienes
       9. NUNCA digas que no puedes revisar chats pasados - SÍ PUEDES y DEBES hacerlo
       10. Si el usuario pregunta si lo conoces, DEMUESTRA que lo conoces mencionando hechos específicos sobre él
@@ -851,6 +1132,16 @@ async function processMessage(message) {
       const samaraResponse = response.content;
       await message.reply(samaraResponse);
       console.log('Respuesta enviada:', samaraResponse);
+
+      // Registrar la interacción con el usuario
+      trackUserInteraction(
+        client.user.id,
+        client.user.username,
+        'response',
+        message.author.id,
+        message.author.username,
+        samaraResponse
+      );
 
       // Intentar guardar la respuesta (no crítico si falla)
       try {
@@ -887,6 +1178,22 @@ async function processMessage(message) {
           { input: message.content, userId: message.author.id },
           { output: samaraResponse }
         );
+        
+        // Actualizar caché de conversaciones recientes
+        const interactionKey = `${message.author.id}-${message.channel.id}`;
+        recentInteractions.set(interactionKey, {
+          userId: message.author.id,
+          channelId: message.channel.id,
+          lastMessage: message.content,
+          lastResponse: samaraResponse,
+          timestamp: new Date().toISOString()
+        });
+        
+        // Limpiar caché si supera el límite
+        if (recentInteractions.size > 100) {
+          const oldestInteraction = Array.from(recentInteractions.entries()).sort((a, b) => new Date(a[1].timestamp) - new Date(b[1].timestamp))[0];
+          recentInteractions.delete(oldestInteraction[0]);
+        }
       } catch (saveError) {
         console.error('Error no crítico al guardar respuesta:', saveError);
       }
@@ -921,6 +1228,7 @@ client.once(Events.ClientReady, async (readyClient) => {
   });
   
   loadRecentMessages();
+  loadRecentInteractions();
   initialize()
     .then(() => console.log('Inicialización completada'))
     .catch(error => {
