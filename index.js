@@ -642,11 +642,19 @@ async function logMemoryUsers() {
 
 // Función para verificar si Samara ha hablado con un usuario específico
 function hasInteractedWithUser(targetUsername) {
+  // Validar que targetUsername sea válido
+  if (!targetUsername || typeof targetUsername !== 'string') {
+    console.log('Nombre de usuario inválido o no proporcionado:', targetUsername);
+    return { found: false };
+  }
+
   // Normalizar el nombre de usuario para comparación
   const normalizedTarget = targetUsername.toLowerCase();
   
   // Buscar en interacciones recientes
   for (const [key, interaction] of recentInteractions.entries()) {
+    if (!interaction || !interaction.targetUsername) continue;
+    
     const username = interaction.targetUsername.toLowerCase();
     
     // Comprobar si el nombre coincide parcialmente
@@ -660,10 +668,11 @@ function hasInteractedWithUser(targetUsername) {
   }
   
   // Buscar en mensajes recientes
-  const matchingMessages = recentMessages.filter(msg => 
-    msg.author.toLowerCase().includes(normalizedTarget) || 
-    normalizedTarget.includes(msg.author.toLowerCase())
-  );
+  const matchingMessages = recentMessages.filter(msg => {
+    if (!msg || !msg.author) return false;
+    const authorName = msg.author.toLowerCase();
+    return authorName.includes(normalizedTarget) || normalizedTarget.includes(authorName);
+  });
   
   if (matchingMessages.length > 0) {
     console.log(`Encontrados ${matchingMessages.length} mensajes de ${targetUsername}`);
@@ -674,22 +683,24 @@ function hasInteractedWithUser(targetUsername) {
   }
   
   // Buscar en la memoria a largo plazo
-  const userMemories = Array.from(langMem.memories.entries())
-    .filter(([userId, memories]) => {
-      // Intentar encontrar coincidencias en las memorias
-      return memories.some(memory => 
-        memory.username && 
-        (memory.username.toLowerCase().includes(normalizedTarget) || 
-         normalizedTarget.includes(memory.username.toLowerCase()))
-      );
-    });
-  
-  if (userMemories.length > 0) {
-    console.log(`Encontradas memorias para ${targetUsername}`);
-    return {
-      found: true,
-      memories: userMemories
-    };
+  if (langMem && langMem.memories) {
+    const userMemories = Array.from(langMem.memories.entries())
+      .filter(([userId, memories]) => {
+        // Intentar encontrar coincidencias en las memorias
+        return memories.some(memory => {
+          if (!memory || !memory.username) return false;
+          const memoryUsername = memory.username.toLowerCase();
+          return memoryUsername.includes(normalizedTarget) || normalizedTarget.includes(memoryUsername);
+        });
+      });
+    
+    if (userMemories.length > 0) {
+      console.log(`Encontradas memorias para ${targetUsername}`);
+      return {
+        found: true,
+        memories: userMemories
+      };
+    }
   }
   
   return { found: false };
