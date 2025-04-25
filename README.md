@@ -227,7 +227,15 @@ En lugar de:
 
 **Bot tradicional**: "Como asistente, puedo informarte que los videojuegos son una forma popular de entretenimiento digital. ¿Puedo ayudarte con algo más sobre este tema?"
 
-## Solución de Problemas
+### Canales Monitoreados
+
+Cambia la lista `MONITORED_CHANNELS` en `index.js` para monitorear diferentes canales.
+
+### Extracción de Hechos
+
+Ajusta la función `extractFacts` en `index.js` para modificar cómo se extraen los hechos de los mensajes.
+
+## 🔧 Solución de Problemas
 
 ### Problemas Comunes
 

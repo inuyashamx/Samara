@@ -35,17 +35,10 @@ yarn-debug.log*
 yarn-error.log*
 
 # Datos locales y caché
-data/
 *.pid
 *.lock
 .cache/
 .npm/
-
-# Archivos de memoria y vectores
-data/memories.json
-data/facts.json
-data/relationships.json
-data/recent_messages.json
 
 # Archivos de compilación
 dist/
